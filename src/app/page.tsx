@@ -100,7 +100,6 @@ function HomePageContent() {
           items = items.filter((p) => {
             const pid = p.seller?.id;
             if (pid === user._id) return false;
-            if (user._id === '6aef65d4676b6547b4dbb657' && pid === 'seller-recircle-user') return false;
             return true;
           });
         }

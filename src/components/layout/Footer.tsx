@@ -162,7 +162,7 @@ export default function Footer() {
               <li className="text-gray-300">Condition Grading Guide</li>
               <li className="text-gray-300">Safe Meet-up Tips</li>
               <li className="text-gray-300">Sustainability Metrics</li>
-              <li className="text-gray-300">GridFS Binary Storage</li>
+              <li className="text-gray-300">Secure Cloud Image Storage</li>
             </ul>
           </div>
         </div>
@@ -170,7 +170,7 @@ export default function Footer() {
         {/* Bottom copyright and disclaimer */}
         <div className="pt-8 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between text-xs text-gray-400 gap-4">
           <div className="flex items-center space-x-1">
-            <span>© {new Date().getFullYear()} ReCircle Marketplace Inc. Powered by MongoDB & GridFS.</span>
+            <span>© {new Date().getFullYear()} ReCircle Marketplace Inc. Powered by Supabase.</span>
           </div>
           <div className="flex items-center space-x-4">
             <span className="flex items-center gap-1 text-mint">

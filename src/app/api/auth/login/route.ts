@@ -1,94 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase } from '@/lib/supabase';
 import { verifyPassword, generateToken, TOKEN_NAME } from '@/lib/auth';
+import { mapUser } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
 
-function normalizePhone(phone: string): string {
-  return phone.replace(/[^\d+]/g, '');
-}
+const normalizePhone = (phone: string) => phone.replace(/[^\d+]/g, '');
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { phone, password } = body;
-
+    const { phone, password } = await req.json();
     if (!phone || !password) {
-      return NextResponse.json(
-        { error: 'Phone number and password are required.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Phone number and password are required.' }, { status: 400 });
     }
 
-    const cleanInput = phone.trim();
-    const cleanPhone = normalizePhone(cleanInput);
+    const input = String(phone).trim();
+    const cleanPhone = normalizePhone(input);
+    const cleanEmail = input.toLowerCase();
 
-    const db = await getDatabase();
-    const usersCollection = db.collection('users');
-
-    // Find user by phone number or email (case-insensitive)
-    const userDoc = await usersCollection.findOne({
-      $or: [
-        { phone: cleanPhone },
-        { phone: cleanInput },
-        { email: cleanInput.toLowerCase() },
-      ],
-    });
-
-    if (!userDoc) {
-      return NextResponse.json(
-        { error: 'No account found with this phone number or email ID.' },
-        { status: 404 }
-      );
+    const supabase = getSupabase();
+    let { data: userRow, error } = await supabase
+      .from('users').select('*').eq('phone', cleanPhone).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!userRow) {
+      const byEmail = await supabase.from('users').select('*').eq('email', cleanEmail).maybeSingle();
+      if (byEmail.error) throw new Error(byEmail.error.message);
+      userRow = byEmail.data;
+    }
+    if (!userRow) {
+      return NextResponse.json({ error: 'No account found with this phone number or email ID.' }, { status: 404 });
+    }
+    if (!(await verifyPassword(password, userRow.password_hash))) {
+      return NextResponse.json({ error: 'Incorrect password. Please verify and try again.' }, { status: 401 });
     }
 
-    const isMatch = await verifyPassword(password, userDoc.passwordHash);
-    if (!isMatch) {
-      return NextResponse.json(
-        { error: 'Incorrect password. Please verify and try again.' },
-        { status: 401 }
-      );
-    }
-
-    const token = generateToken({
-      _id: userDoc._id.toString(),
-      phone: userDoc.phone,
-      email: userDoc.email,
-      username: userDoc.username,
-    });
-
-    const userProfile = {
-      _id: userDoc._id.toString(),
-      username: userDoc.username,
-      phone: userDoc.phone,
-      email: userDoc.email,
-      avatarUrl: userDoc.avatarUrl || undefined,
-      rating: userDoc.rating || 5.0,
-      reviewsCount: userDoc.reviewsCount || 0,
-      verified: Boolean(userDoc.verified),
-      memberSince: userDoc.memberSince || '2024',
-      city: userDoc.city || 'Bangalore',
-    };
-
-    const response = NextResponse.json({
-      success: true,
-      message: 'Logged in successfully!',
-      user: userProfile,
-      token,
-    });
-
+    const user = mapUser(userRow);
+    const token = generateToken(user);
+    const response = NextResponse.json({ success: true, message: 'Logged in successfully!', user });
     response.cookies.set(TOKEN_NAME, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 30 * 24 * 60 * 60, // 30 days
+      maxAge: 30 * 24 * 60 * 60,
     });
-
     return response;
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Login error:', error);
-    const msg = error instanceof Error ? error.message : 'Login failed';
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Login failed' }, { status: 500 });
   }
 }

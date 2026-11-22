@@ -1,5 +1,6 @@
 'use client';
 
+import { uploadImages } from '@/lib/upload-client';
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
@@ -58,17 +59,9 @@ function DashboardContent() {
     }
 
     setUpdatingAvatar(true);
-    const toastId = toast.loading('Uploading profile photo to GridFS...');
+    const toastId = toast.loading('Uploading profile photo...');
     try {
-      const formData = new FormData();
-      formData.append('images', file);
-      formData.append('sellerId', user?._id || 'user');
-
-      const uploadRes = await fetch('/api/images/upload', {
-        method: 'POST',
-        body: formData,
-      });
-      const uploadData = await uploadRes.json();
+      const uploadData = await uploadImages([file], 'avatar');
 
       if (uploadData.success && uploadData.images?.[0]?.url) {
         const newUrl = uploadData.images[0].url;
@@ -126,7 +119,7 @@ function DashboardContent() {
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
-    const sellerId = user?._id || 'seller-recircle-user';
+    const sellerId = user?._id;
     try {
       // 1. Fetch Stats
       const statsRes = await fetch(`/api/stats?sellerId=${sellerId}`);
@@ -205,7 +198,7 @@ function DashboardContent() {
 
   // Delete Listing Handler
   const handleDeleteProduct = async (productId: string) => {
-    if (!confirm('Are you sure you want to delete this listing? All GridFS photos will be cleaned up.')) {
+    if (!confirm('Are you sure you want to delete this listing? All its photos will be removed too.')) {
       return;
     }
     try {
@@ -213,7 +206,7 @@ function DashboardContent() {
       const data = await res.json();
       if (data.success) {
         setMyListings((prev) => prev.filter((p) => p._id !== productId));
-        toast.success('Listing and GridFS images successfully deleted');
+        toast.success('Listing and its images deleted');
         fetchDashboardData();
       } else {
         toast.error(data.error || 'Failed to delete listing');
@@ -628,7 +621,7 @@ function DashboardContent() {
                               type="button"
                               onClick={() => handleDeleteProduct(product._id)}
                               className="p-2 rounded-xl border border-rose-200 text-rose-600 hover:bg-rose-50"
-                              title="Delete Listing and GridFS Images"
+                              title="Delete listing and images"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>

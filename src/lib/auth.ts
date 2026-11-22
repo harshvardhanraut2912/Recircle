@@ -1,11 +1,20 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { NextRequest } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { getDatabase } from './mongodb';
+import { getSupabase, isUuid } from './supabase';
+import { mapUser, USER_PUBLIC_COLUMNS } from './mappers';
 import { UserProfile } from '@/types';
+import { getAdminSession } from './admin-auth';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'recircle_secure_jwt_secret_key_2026_sustainability';
+function getJwtSecret(): string {
+  const s = process.env.JWT_SECRET;
+  if (s) return s;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET environment variable is required in production.');
+  }
+  return 'dev-only-insecure-jwt-secret';
+}
+
 const TOKEN_NAME = 'recircle_auth_token';
 
 export async function hashPassword(password: string): Promise<string> {
@@ -19,20 +28,17 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export function generateToken(user: { _id: string; phone: string; email: string; username: string }): string {
   return jwt.sign(
-    {
-      userId: user._id,
-      phone: user.phone,
-      email: user.email,
-      username: user.username,
-    },
-    JWT_SECRET,
+    { userId: user._id, phone: user.phone, email: user.email, username: user.username },
+    getJwtSecret(),
     { expiresIn: '30d' }
   );
 }
 
-export function verifyAuthToken(token: string): { userId: string; phone: string; email: string; username: string } | null {
+export function verifyAuthToken(
+  token: string
+): { userId: string; phone: string; email: string; username: string } | null {
   try {
-    return jwt.verify(token, JWT_SECRET) as {
+    return jwt.verify(token, getJwtSecret()) as {
       userId: string;
       phone: string;
       email: string;
@@ -48,33 +54,29 @@ export async function getSessionUser(req: NextRequest): Promise<UserProfile | nu
   const authHeader = req.headers.get('authorization');
   const headerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
   const token = cookieToken || headerToken;
-
   if (!token) return null;
 
   const decoded = verifyAuthToken(token);
-  if (!decoded || !decoded.userId) return null;
+  if (!decoded || !isUuid(decoded.userId)) return null;
 
   try {
-    const db = await getDatabase();
-    const userDoc = await db.collection('users').findOne({ _id: new ObjectId(decoded.userId) });
-    if (!userDoc) return null;
-
-    return {
-      _id: userDoc._id.toString(),
-      username: userDoc.username,
-      email: userDoc.email,
-      phone: userDoc.phone,
-      avatarUrl: userDoc.avatarUrl || undefined,
-      rating: userDoc.rating || 5.0,
-      reviewsCount: userDoc.reviewsCount || 0,
-      verified: Boolean(userDoc.verified),
-      memberSince: userDoc.memberSince || '2024',
-      city: userDoc.city || 'Bangalore',
-    };
+    const { data, error } = await getSupabase()
+      .from('users')
+      .select(USER_PUBLIC_COLUMNS)
+      .eq('id', decoded.userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return mapUser(data);
   } catch (err) {
     console.error('Error fetching session user:', err);
     return null;
   }
+}
+
+/** Who is making this request: a logged-in user and/or the superadmin. */
+export async function getActor(req: NextRequest) {
+  const [user, admin] = await Promise.all([getSessionUser(req), Promise.resolve(getAdminSession(req))]);
+  return { user, isAdmin: Boolean(admin) };
 }
 
 export { TOKEN_NAME };

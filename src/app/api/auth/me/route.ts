@@ -1,19 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
 import { getSessionUser } from '@/lib/auth';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
     const user = await getSessionUser(req);
-    return NextResponse.json({
-      success: true,
-      user,
-      authenticated: Boolean(user),
-    });
-  } catch (error: unknown) {
+    return NextResponse.json({ success: true, user, authenticated: Boolean(user) });
+  } catch (error) {
     console.error('Auth check error:', error);
     return NextResponse.json({ success: false, user: null, authenticated: false }, { status: 200 });
   }
@@ -22,49 +17,28 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const sessionUser = await getSessionUser(req);
-    if (!sessionUser) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!sessionUser) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const { avatarUrl, city } = await req.json();
+    const update: Record<string, unknown> = {};
+    if (avatarUrl !== undefined) update.avatar_url = avatarUrl || null;
+    if (city !== undefined && String(city).trim()) update.city = String(city).trim();
+
+    if (Object.keys(update).length > 0) {
+      const { error } = await getSupabase().from('users').update(update).eq('id', sessionUser._id);
+      if (error) throw new Error(error.message);
     }
-
-    const body = await req.json();
-    const { avatarUrl, city } = body;
-
-    const db = await getDatabase();
-    const updateDoc: Record<string, unknown> = {};
-
-    if (avatarUrl !== undefined) {
-      updateDoc.avatarUrl = avatarUrl || null;
-    }
-    if (city !== undefined) {
-      updateDoc.city = city.trim();
-    }
-
-    if (Object.keys(updateDoc).length > 0) {
-      await db.collection('users').updateOne(
-        { _id: new ObjectId(sessionUser._id) },
-        { $set: updateDoc }
-      );
-
-      // If avatar was updated, also update products listed by this user
-      if (avatarUrl !== undefined) {
-        await db.collection('products').updateMany(
-          { 'seller.id': sessionUser._id },
-          { $set: { 'seller.avatarUrl': avatarUrl || undefined } }
-        );
-      }
-    }
-
-    const updatedUser = {
-      ...sessionUser,
-      ...updateDoc,
-    };
 
     return NextResponse.json({
       success: true,
-      user: updatedUser,
+      user: {
+        ...sessionUser,
+        ...(update.avatar_url !== undefined ? { avatarUrl: (update.avatar_url as string) || undefined } : {}),
+        ...(update.city ? { city: update.city as string } : {}),
+      },
       message: 'Profile updated successfully',
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Update profile error:', error);
     return NextResponse.json({ error: 'Failed to update profile' }, { status: 500 });
   }

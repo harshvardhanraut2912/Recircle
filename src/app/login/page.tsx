@@ -1,5 +1,6 @@
 'use client';
 
+import { uploadImages } from '@/lib/upload-client';
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
@@ -130,19 +131,12 @@ function LoginPageContent() {
     setSubmitting(true);
     let uploadedAvatarUrl: string | undefined = undefined;
 
-    // Optional avatar upload to MongoDB GridFS
+    // Optional avatar upload to Supabase Storage
     if (avatarFile) {
       setAvatarUploading(true);
       try {
-        const formData = new FormData();
-        formData.append('images', avatarFile);
-        formData.append('sellerId', signupPhone.trim());
-        const uploadRes = await fetch('/api/images/upload', {
-          method: 'POST',
-          body: formData,
-        });
-        const uploadData = await uploadRes.json();
-        if (uploadData.success && uploadData.images?.[0]?.url) {
+        const uploadData = await uploadImages([avatarFile], 'avatar');
+        if (uploadData.success && uploadData.images[0]?.url) {
           uploadedAvatarUrl = uploadData.images[0].url;
         } else {
           toast.error('Could not upload avatar image, continuing with default person icon.');
@@ -161,18 +155,6 @@ function LoginPageContent() {
       password: signupPassword,
       avatarUrl: uploadedAvatarUrl,
     });
-    setSubmitting(false);
-    if (success) {
-      router.push(redirectUrl);
-    }
-  };
-
-  // Demo auto-filler for testing
-  const handleQuickDemoLogin = async () => {
-    setLoginPhone('9876543210');
-    setLoginPassword('password123');
-    setSubmitting(true);
-    const success = await login('9876543210', 'password123');
     setSubmitting(false);
     if (success) {
       router.push(redirectUrl);
@@ -300,18 +282,6 @@ function LoginPageContent() {
                 )}
               </button>
 
-              {/* Demo 1-Click Login Shortcut */}
-              <div className="pt-3 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={handleQuickDemoLogin}
-                  disabled={submitting}
-                  className="w-full py-2.5 px-4 rounded-2xl bg-brand-50 text-brand-800 text-xs font-bold border border-brand-200 hover:bg-brand-100 transition-colors flex items-center justify-center space-x-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-mint" />
-                  <span>One-Click Demo Account Sign In (Aarav Sharma)</span>
-                </button>
-              </div>
             </form>
           ) : (
             /* SIGNUP FORM */

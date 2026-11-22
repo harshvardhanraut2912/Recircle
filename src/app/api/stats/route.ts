@@ -1,47 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase } from '@/lib/supabase';
 import { getSessionUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const sessionUser = await getSessionUser(req);
-    const { searchParams } = new URL(req.url);
-    const paramSellerId = searchParams.get('sellerId');
-    const sellerId = paramSellerId || sessionUser?._id || 'seller-recircle-user';
+    const user = await getSessionUser(req);
+    if (!user) return NextResponse.json({ error: 'Please log in.' }, { status: 401 });
 
-    const db = await getDatabase();
-    const productsColl = db.collection('products');
-    const requestsColl = db.collection('requests');
-
-    // If demo account Aarav Sharma, match both his id and legacy 'seller-recircle-user'
-    let sellerMatch: unknown = sellerId;
-    if (sellerId === '6aef65d4676b6547b4dbb657' || sellerId === 'seller-recircle-user') {
-      sellerMatch = { $in: ['6aef65d4676b6547b4dbb657', 'seller-recircle-user'] };
-    }
-
-    const [activeListings, soldProducts, allSellerProducts, pendingRequests] = await Promise.all([
-      productsColl.countDocuments({ 'seller.id': sellerMatch, status: 'active' }),
-      productsColl.find({ 'seller.id': sellerMatch, status: 'sold' }).toArray(),
-      productsColl.find({ 'seller.id': sellerMatch }).toArray(),
-      requestsColl.countDocuments({ sellerId: sellerMatch, status: 'new' }),
+    const supabase = getSupabase();
+    const [{ data: products, error: pErr }, { count: pending, error: rErr }] = await Promise.all([
+      supabase.from('products').select('status, price, views').eq('seller_id', user._id),
+      supabase.from('requests').select('id', { count: 'exact', head: true })
+        .eq('seller_id', user._id).eq('status', 'new'),
     ]);
+    if (pErr || rErr) throw new Error((pErr || rErr)!.message);
 
-    const totalViews = allSellerProducts.reduce((acc, curr) => acc + (curr.views || 0), 0);
-    const totalEarnings = soldProducts.reduce((acc, curr) => acc + (curr.price || 0), 0);
-
+    const list = products || [];
+    const sold = list.filter((p) => p.status === 'sold');
     return NextResponse.json({
       success: true,
       stats: {
-        activeListings,
-        totalViews,
-        pendingRequests,
-        totalEarnings,
-        itemsSold: soldProducts.length,
+        activeListings: list.filter((p) => p.status === 'active').length,
+        totalViews: list.reduce((a, p) => a + (p.views || 0), 0),
+        pendingRequests: pending ?? 0,
+        totalEarnings: sold.reduce((a, p) => a + Number(p.price || 0), 0),
+        itemsSold: sold.length,
       },
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Stats error:', error);
     return NextResponse.json({ error: 'Failed to fetch dashboard stats' }, { status: 500 });
   }

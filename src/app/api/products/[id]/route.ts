@@ -1,180 +1,174 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { getDatabase } from '@/lib/mongodb';
-import { deleteProductImages, deleteImage, associateImagesWithProduct } from '@/lib/gridfs';
+import { getSupabase, isUuid } from '@/lib/supabase';
+import { getActor } from '@/lib/auth';
+import { mapProduct, PRODUCT_SELECT } from '@/lib/mappers';
+import { deleteStorageObjects } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const { id } = params;
-    if (!id || !ObjectId.isValid(id)) {
-      return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
-    }
+    if (!isUuid(id)) return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
 
-    const db = await getDatabase();
-    const collection = db.collection('products');
+    const supabase = getSupabase();
+    const { data: product, error } = await supabase
+      .from('products').select(PRODUCT_SELECT).eq('id', id).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
 
-    // Atomically increment views
-    const product = await collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $inc: { views: 1 } },
-      { returnDocument: 'after' }
-    );
+    await supabase.rpc('increment_product_views', { p_id: id });
+    product.views += 1;
 
-    if (!product) {
-      return NextResponse.json({ error: 'Product not found' }, { status: 404 });
-    }
-
-    // Fetch related products in the same category
-    const related = await collection
-      .find({
-        category: product.category,
-        _id: { $ne: new ObjectId(id) },
-        status: 'active',
-      })
-      .limit(4)
-      .toArray();
+    const { data: related } = await supabase
+      .from('products')
+      .select(PRODUCT_SELECT)
+      .eq('category', product.category)
+      .eq('status', 'active')
+      .neq('id', id)
+      .limit(4);
 
     return NextResponse.json({
       success: true,
-      product: {
-        ...product,
-        _id: product._id.toString(),
-      },
-      related: related.map((r) => ({ ...r, _id: r._id.toString() })),
+      product: mapProduct(product),
+      related: (related || []).map(mapProduct),
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Fetch product by id error:', error);
     return NextResponse.json({ error: 'Failed to retrieve product' }, { status: 500 });
   }
 }
 
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const { id } = params;
-    if (!id || !ObjectId.isValid(id)) {
-      return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
+    if (!isUuid(id)) return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
+
+    const { user, isAdmin } = await getActor(req);
+    const supabase = getSupabase();
+
+    const { data: existing } = await supabase
+      .from('products').select('id, seller_id, price, original_price').eq('id', id).maybeSingle();
+    if (!existing) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    if (!isAdmin && user?._id !== existing.seller_id) {
+      return NextResponse.json({ error: 'You can only edit your own listings.' }, { status: 403 });
     }
 
-    const body = await req.json();
-    const db = await getDatabase();
-    const collection = db.collection('products');
+    const b = await req.json();
+    const u: Record<string, unknown> = {};
+    const set = (k: string, v: unknown) => { if (v !== undefined) u[k] = v; };
 
-    const existingProduct = await collection.findOne({ _id: new ObjectId(id) });
-    if (!existingProduct) {
-      return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    set('title', typeof b.title === 'string' ? b.title.trim() : undefined);
+    set('description', typeof b.description === 'string' ? b.description.trim() : undefined);
+    set('category', b.category);
+    set('subcategory', b.subcategory);
+    set('brand', b.brand);
+    set('model', b.model);
+    set('condition', b.condition);
+    set('condition_notes', b.conditionNotes);
+    set('purchase_year', b.purchaseYear ? parseInt(b.purchaseYear, 10) : undefined);
+    set('has_receipt', b.hasReceipt === undefined ? undefined : Boolean(b.hasReceipt));
+    set('has_warranty', b.hasWarranty === undefined ? undefined : Boolean(b.hasWarranty));
+    set('has_original_box', b.hasOriginalBox === undefined ? undefined : Boolean(b.hasOriginalBox));
+    if (b.status !== undefined && ['active', 'reserved', 'sold'].includes(b.status)) u.status = b.status;
+    if (b.location) {
+      set('location_city', b.location.city);
+      set('location_state', b.location.state);
+      set('location_neighborhood', b.location.neighborhood);
+      set('location_zip', b.location.zipCode);
+    }
+    if (b.deliveryOptions) {
+      set('delivery_pickup', b.deliveryOptions.pickup);
+      set('delivery_delivery', b.deliveryOptions.delivery);
+      set('delivery_shipping', b.deliveryOptions.shipping);
     }
 
-    // Requirement: When a product is edited, do not accidentally delete images still being used.
-    // Clean up ONLY images that were removed in this edit.
-    if (body.images && Array.isArray(body.images)) {
-      const existingFileIds: string[] = (existingProduct.images || [])
-        .map((img: { fileId: string }) => img.fileId)
-        .filter(Boolean);
-      const newFileIds: string[] = body.images
-        .map((img: { fileId: string }) => img.fileId)
-        .filter(Boolean);
+    if (b.price !== undefined || b.originalPrice !== undefined) {
+      const p = b.price !== undefined ? parseFloat(b.price) : Number(existing.price);
+      const op =
+        b.originalPrice !== undefined
+          ? (b.originalPrice ? parseFloat(b.originalPrice) : null)
+          : existing.original_price != null ? Number(existing.original_price) : null;
+      u.price = p;
+      u.original_price = op;
+      u.savings_percentage = op && op > p ? Math.round(((op - p) / op) * 100) : 0;
+    }
 
-      const removedFileIds = existingFileIds.filter((oldId) => !newFileIds.includes(oldId));
-      for (const removedId of removedFileIds) {
-        await deleteImage(removedId);
+    // Image changes: diff against current rows
+    if (Array.isArray(b.images)) {
+      const ownerId = existing.seller_id as string;
+      const { data: oldRows } = await supabase
+        .from('product_images').select('storage_path').eq('product_id', id);
+      const oldPaths = (oldRows || []).map((r) => r.storage_path as string);
+      const incoming = b.images.filter(
+        (i: { fileId?: string; url?: string }) => i?.fileId?.startsWith(`${ownerId}/`) && i?.url
+      );
+      const newPaths = incoming.map((i: { fileId: string }) => i.fileId);
+
+      const removed = oldPaths.filter((p) => !newPaths.includes(p));
+      if (removed.length) {
+        await supabase.from('product_images').delete().eq('product_id', id).in('storage_path', removed);
+        await deleteStorageObjects(removed);
       }
-
-      // Associate any newly added images with this product
-      const newlyAddedIds = newFileIds.filter((newId) => !existingFileIds.includes(newId));
-      if (newlyAddedIds.length > 0) {
-        await associateImagesWithProduct(
-          newlyAddedIds,
-          id,
-          existingProduct.seller?.id || 'seller-recircle'
+      const added = incoming.filter((i: { fileId: string }) => !oldPaths.includes(i.fileId));
+      if (added.length) {
+        await supabase.from('product_images').insert(
+          added.map((i: Record<string, unknown>) => ({
+            product_id: id, storage_path: i.fileId, url: i.url, filename: i.filename || '',
+            mime_type: i.mimeType || 'image/webp', size_bytes: Number(i.size) || 0,
+            width: i.width ?? null, height: i.height ?? null, is_primary: false, position: 0,
+          }))
         );
       }
-
-      // Ensure primary image URL is updated
-      const primaryImg = body.images.find((img: { isPrimary?: boolean }) => img.isPrimary) || body.images[0];
-      if (primaryImg) {
-        body.primaryImageUrl = primaryImg.url;
+      const primary = incoming.find((i: { isPrimary?: boolean }) => i.isPrimary) || incoming[0];
+      for (let idx = 0; idx < incoming.length; idx++) {
+        await supabase.from('product_images')
+          .update({ position: idx, is_primary: incoming[idx] === primary })
+          .eq('product_id', id).eq('storage_path', incoming[idx].fileId);
       }
+      if (primary) u.primary_image_url = primary.url;
     }
 
-    // Recompute savings if price or originalPrice changed
-    if (body.price !== undefined || body.originalPrice !== undefined) {
-      const p = body.price !== undefined ? parseFloat(body.price) : existingProduct.price;
-      const op = body.originalPrice !== undefined ? parseFloat(body.originalPrice) : existingProduct.originalPrice;
-      if (op && op > p) {
-        body.savingsPercentage = Math.round(((op - p) / op) * 100);
-      } else {
-        body.savingsPercentage = 0;
-      }
+    if (Object.keys(u).length > 0) {
+      const { error } = await supabase.from('products').update(u).eq('id', id);
+      if (error) throw new Error(error.message);
     }
 
-    body.updatedAt = new Date().toISOString();
-
-    // Prevent overwriting _id
-    delete body._id;
-
-    await collection.updateOne({ _id: new ObjectId(id) }, { $set: body });
-
-    const updated = await collection.findOne({ _id: new ObjectId(id) });
-    return NextResponse.json({
-      success: true,
-      product: {
-        ...updated,
-        _id: updated!._id.toString(),
-      },
-    });
-  } catch (error: unknown) {
+    const { data: updated } = await supabase.from('products').select(PRODUCT_SELECT).eq('id', id).single();
+    return NextResponse.json({ success: true, product: mapProduct(updated) });
+  } catch (error) {
     console.error('Update product error:', error);
     return NextResponse.json({ error: 'Failed to update product' }, { status: 500 });
   }
 }
 
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const { id } = params;
-    if (!id || !ObjectId.isValid(id)) {
-      return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
+    if (!isUuid(id)) return NextResponse.json({ error: 'Valid Product ID is required' }, { status: 400 });
+
+    const { user, isAdmin } = await getActor(req);
+    const supabase = getSupabase();
+
+    const { data: product } = await supabase
+      .from('products').select('id, seller_id').eq('id', id).maybeSingle();
+    if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    if (!isAdmin && user?._id !== product.seller_id) {
+      return NextResponse.json({ error: 'You can only delete your own listings.' }, { status: 403 });
     }
 
-    const db = await getDatabase();
-    const collection = db.collection('products');
+    const { data: imgs } = await supabase.from('product_images').select('storage_path').eq('product_id', id);
+    const deleted = await deleteStorageObjects((imgs || []).map((i) => i.storage_path as string));
 
-    const product = await collection.findOne({ _id: new ObjectId(id) });
-    if (!product) {
-      return NextResponse.json({ error: 'Product not found' }, { status: 404 });
-    }
-
-    // Requirement: When a product is deleted, clean up its associated image files in GridFS
-    const deletedImagesCount = await deleteProductImages(id);
-
-    // Also delete any images referenced directly in product document if any
-    if (product.images && Array.isArray(product.images)) {
-      for (const img of product.images) {
-        if (img.fileId) {
-          await deleteImage(img.fileId);
-        }
-      }
-    }
-
-    // Delete product document
-    await collection.deleteOne({ _id: new ObjectId(id) });
+    const { error } = await supabase.from('products').delete().eq('id', id); // cascades to images + requests
+    if (error) throw new Error(error.message);
 
     return NextResponse.json({
       success: true,
-      message: 'Product and associated GridFS images successfully deleted',
-      deletedImagesCount,
+      message: 'Product and its storage images deleted',
+      deletedImagesCount: deleted,
     });
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Delete product error:', error);
     return NextResponse.json({ error: 'Failed to delete product' }, { status: 500 });
   }

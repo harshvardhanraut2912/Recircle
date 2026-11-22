@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase, isUuid } from '@/lib/supabase';
 import { assertAdminAuthorized } from '@/lib/admin-auth';
+import { deleteStorageObjects } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,68 +10,40 @@ export async function GET(req: NextRequest) {
     const authError = assertAdminAuthorized(req);
     if (authError) return authError;
 
-    const db = await getDatabase();
-    const usersCollection = db.collection('users');
-    const productsCollection = db.collection('products');
-    const requestsCollection = db.collection('requests');
+    const supabase = getSupabase();
+    const [u, p, r] = await Promise.all([
+      supabase.from('users')
+        .select('id, username, phone, email, avatar_url, rating, reviews_count, verified, city, member_since, created_at')
+        .order('created_at', { ascending: false }),
+      supabase.from('products').select('seller_id, status, price'),
+      supabase.from('requests').select('seller_id, buyer_id'),
+    ]);
+    if (u.error || p.error || r.error) throw new Error((u.error || p.error || r.error)!.message);
 
-    const rawUsers = await usersCollection.find({}).sort({ createdAt: -1 }).toArray();
-
-    // Enrich each user with aggregate counts
-    const users = await Promise.all(
-      rawUsers.map(async (u) => {
-        const uId = u._id.toString();
-        const sellerMatch = {
-          $or: [
-            { 'seller.id': uId },
-            { 'seller.id': u._id },
-            { 'seller.phone': u.phone },
-            { 'seller.email': u.email },
-          ],
-        };
-
-        const [listingsCount, activeCount, inquiriesReceived, ordersPlaced, userProducts] =
-          await Promise.all([
-            productsCollection.countDocuments(sellerMatch),
-            productsCollection.countDocuments({ ...sellerMatch, status: 'active' }),
-            requestsCollection.countDocuments({
-              $or: [{ sellerId: uId }, { sellerId: u.phone }, { sellerEmail: u.email }],
-            }),
-            requestsCollection.countDocuments({
-              $or: [{ buyerId: uId }, { buyerEmail: u.email }, { buyerPhone: u.phone }],
-            }),
-            productsCollection.find(sellerMatch).project({ price: 1 }).toArray(),
-          ]);
-
-        const totalListedValue = userProducts.reduce((sum, p) => sum + (Number(p.price) || 0), 0);
-
-        return {
-          _id: uId,
-          username: u.username || 'Anonymous User',
-          phone: u.phone || 'No phone',
-          email: u.email || 'No email',
-          avatarUrl: u.avatarUrl || null,
-          rating: u.rating || 5.0,
-          reviewsCount: u.reviewsCount || 0,
-          verified: Boolean(u.verified ?? true),
-          city: u.city || 'Bangalore, IN',
-          memberSince: u.memberSince || '2024',
-          createdAt: u.createdAt || new Date().toISOString(),
-          listingsCount,
-          activeCount,
-          inquiriesReceived,
-          ordersPlaced,
-          totalListedValue,
-        };
-      })
-    );
-
-    return NextResponse.json({
-      success: true,
-      users,
-      count: users.length,
+    const users = (u.data || []).map((x) => {
+      const mine = (p.data || []).filter((pr) => pr.seller_id === x.id);
+      return {
+        _id: x.id,
+        username: x.username || 'Anonymous User',
+        phone: x.phone || 'No phone',
+        email: x.email || 'No email',
+        avatarUrl: x.avatar_url || null,
+        rating: Number(x.rating ?? 5),
+        reviewsCount: x.reviews_count ?? 0,
+        verified: Boolean(x.verified),
+        city: x.city || 'Bangalore',
+        memberSince: x.member_since || '2024',
+        createdAt: x.created_at,
+        listingsCount: mine.length,
+        activeCount: mine.filter((pr) => pr.status === 'active').length,
+        inquiriesReceived: (r.data || []).filter((rq) => rq.seller_id === x.id).length,
+        ordersPlaced: (r.data || []).filter((rq) => rq.buyer_id === x.id).length,
+        totalListedValue: mine.reduce((a, pr) => a + Number(pr.price || 0), 0),
+      };
     });
-  } catch (error: unknown) {
+
+    return NextResponse.json({ success: true, users, count: users.length });
+  } catch (error) {
     console.error('Admin users fetch error:', error);
     return NextResponse.json({ error: 'Failed to retrieve users' }, { status: 500 });
   }
@@ -82,22 +54,22 @@ export async function DELETE(req: NextRequest) {
     const authError = assertAdminAuthorized(req);
     if (authError) return authError;
 
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('id');
+    const userId = new URL(req.url).searchParams.get('id');
+    if (!isUuid(userId)) return NextResponse.json({ error: 'Valid user ID is required' }, { status: 400 });
 
-    if (!userId || !ObjectId.isValid(userId)) {
-      return NextResponse.json({ error: 'Valid user ID is required' }, { status: 400 });
+    const supabase = getSupabase();
+    // clean up the user's stored images first (DB rows cascade automatically)
+    const { data: prods } = await supabase.from('products').select('id').eq('seller_id', userId);
+    const ids = (prods || []).map((x) => x.id);
+    if (ids.length) {
+      const { data: imgs } = await supabase.from('product_images').select('storage_path').in('product_id', ids);
+      await deleteStorageObjects((imgs || []).map((i) => i.storage_path as string));
     }
+    const { error } = await supabase.from('users').delete().eq('id', userId);
+    if (error) throw new Error(error.message);
 
-    const db = await getDatabase();
-    await db.collection('users').deleteOne({ _id: new ObjectId(userId) });
-
-    return NextResponse.json({
-      success: true,
-      message: 'User removed successfully',
-      deletedId: userId,
-    });
-  } catch (error: unknown) {
+    return NextResponse.json({ success: true, message: 'User removed successfully', deletedId: userId });
+  } catch (error) {
     console.error('Admin delete user error:', error);
     return NextResponse.json({ error: 'Failed to delete user' }, { status: 500 });
   }
@@ -108,24 +80,13 @@ export async function PATCH(req: NextRequest) {
     const authError = assertAdminAuthorized(req);
     if (authError) return authError;
 
-    const body = await req.json();
-    const { userId, verified } = body;
+    const { userId, verified } = await req.json();
+    if (!isUuid(userId)) return NextResponse.json({ error: 'Valid user ID is required' }, { status: 400 });
 
-    if (!userId || !ObjectId.isValid(userId)) {
-      return NextResponse.json({ error: 'Valid user ID is required' }, { status: 400 });
-    }
-
-    const db = await getDatabase();
-    await db.collection('users').updateOne(
-      { _id: new ObjectId(userId) },
-      { $set: { verified: Boolean(verified) } }
-    );
-
-    return NextResponse.json({
-      success: true,
-      message: 'User verification status updated',
-    });
-  } catch (error: unknown) {
+    const { error } = await getSupabase().from('users').update({ verified: Boolean(verified) }).eq('id', userId);
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ success: true, message: 'User verification status updated' });
+  } catch (error) {
     console.error('Admin update user error:', error);
     return NextResponse.json({ error: 'Failed to update user' }, { status: 500 });
   }

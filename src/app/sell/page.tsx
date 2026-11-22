@@ -1,5 +1,6 @@
 'use client';
 
+import { uploadImages } from '@/lib/upload-client';
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
@@ -28,7 +29,7 @@ import { toast } from 'sonner';
 
 const STEPS = [
   { id: 1, title: 'Basic Info', desc: 'Title & category' },
-  { id: 2, title: 'Upload Photos', desc: 'GridFS storage' },
+  { id: 2, title: 'Upload Photos', desc: 'Cloud storage' },
   { id: 3, title: 'Price & Condition', desc: 'Condition grading' },
   { id: 4, title: 'Item History', desc: 'Receipts & warranty' },
   { id: 5, title: 'Handover & Location', desc: 'Pickup & shipping' },
@@ -93,7 +94,7 @@ export default function SellWizardPage() {
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
 
-  // Step 2: Uploaded GridFS Images
+  // Step 2: Uploaded Supabase Storage Images
   const [uploadedImages, setUploadedImages] = useState<ProductImage[]>([]);
 
   // Step 3: Pricing & Condition
@@ -159,7 +160,7 @@ export default function SellWizardPage() {
     }
   };
 
-  // Upload handler via backend GridFS endpoint
+  // Upload handler via backend Supabase Storage endpoint
   const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -170,18 +171,9 @@ export default function SellWizardPage() {
     }
 
     setIsUploadingImages(true);
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) {
-      formData.append('images', files[i]);
-    }
-    formData.append('sellerId', user?._id || 'seller-recircle-user');
 
     try {
-      const res = await fetch('/api/images/upload', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
+      const data = await uploadImages(Array.from(files), 'product');
       if (data.success && data.images) {
         const newImages: ProductImage[] = data.images.map((img: ProductImage, idx: number) => ({
           ...img,
@@ -198,7 +190,7 @@ export default function SellWizardPage() {
           return updated;
         });
 
-        toast.success(`Successfully uploaded ${data.images.length} photo(s) to MongoDB GridFS!`);
+        toast.success(`Uploaded ${data.images.length} photo(s)!`);
       } else {
         toast.error(data.error || 'Failed to upload photos');
       }
@@ -223,7 +215,7 @@ export default function SellWizardPage() {
 
   const handleDeleteImage = async (fileId: string, index: number) => {
     try {
-      await fetch(`/api/images/${fileId}`, { method: 'DELETE' });
+      await fetch(`/api/images?path=${encodeURIComponent(fileId)}`, { method: 'DELETE' });
       setUploadedImages((prev) => {
         const remaining = prev.filter((_, i) => i !== index);
         if (remaining.length > 0 && !remaining.some((im) => im.isPrimary)) {
@@ -254,7 +246,7 @@ export default function SellWizardPage() {
       }
     } else if (currentStep === 2) {
       if (uploadedImages.length === 0) {
-        toast.error('Please upload at least 1 photo of your item stored in MongoDB GridFS');
+        toast.error('Please upload at least 1 photo of your item stored in Supabase Storage');
         return false;
       }
     } else if (currentStep === 3) {
@@ -317,17 +309,6 @@ export default function SellWizardPage() {
           shipping,
         },
         images: uploadedImages,
-        seller: {
-          id: user?._id || 'seller-recircle-user',
-          name: user?.username || 'ReCircle Seller',
-          email: user?.email || 'member@recircle.org',
-          phone: user?.phone || '',
-          avatarUrl: user?.avatarUrl,
-          verified: Boolean(user?.verified ?? true),
-          rating: user?.rating || 5.0,
-          reviewsCount: user?.reviewsCount || 0,
-          memberSince: user?.memberSince || '2024',
-        },
       };
 
       const res = await fetch('/api/products', {
@@ -367,7 +348,7 @@ export default function SellWizardPage() {
             List a Pre-Loved Item
           </h1>
           <p className="text-xs sm:text-sm text-charcoal-500 mt-1 max-w-lg mx-auto">
-            Give your quality items a new home. Fast, secure, and powered by MongoDB GridFS storage.
+            Give your quality items a new home. Fast, secure, and powered by Supabase Storage storage.
           </p>
         </div>
 
@@ -505,13 +486,13 @@ export default function SellWizardPage() {
             </div>
           )}
 
-          {/* STEP 2: Upload Product Images (MongoDB GridFS) */}
+          {/* STEP 2: Upload Product Images (Supabase Storage) */}
           {currentStep === 2 && (
             <div className="space-y-6 animate-in fade-in duration-200">
               <div className="border-b border-gray-100 pb-4">
                 <h2 className="text-lg font-bold text-forest">Step 2: Upload Product Images</h2>
                 <p className="text-xs text-charcoal-500">
-                  Photos are compressed and stored directly into MongoDB GridFS. Select your primary image with the star icon.
+                  Photos are compressed and stored directly into Supabase Storage. Select your primary image with the star icon.
                 </p>
               </div>
 
@@ -532,7 +513,7 @@ export default function SellWizardPage() {
                   <UploadCloud className="w-7 h-7 text-forest" />
                 </div>
                 <h3 className="text-sm font-bold text-forest mb-1">
-                  {isUploadingImages ? 'Processing and uploading to GridFS...' : 'Click or Drag Photos Here'}
+                  {isUploadingImages ? 'Processing and uploading to Supabase Storage...' : 'Click or Drag Photos Here'}
                 </h3>
                 <p className="text-xs text-charcoal-400">
                   Supports JPEG, PNG, WebP up to 10MB each. Max 8 photos.
@@ -540,7 +521,7 @@ export default function SellWizardPage() {
                 {isUploadingImages && (
                   <div className="mt-3 flex items-center justify-center space-x-2 text-xs text-brand-700 font-semibold">
                     <Loader2 className="w-4 h-4 animate-spin text-mint" />
-                    <span>Resizing & storing binaries in MongoDB GridFS...</span>
+                    <span>Resizing & storing binaries in Supabase Storage...</span>
                   </div>
                 )}
               </div>
@@ -588,7 +569,7 @@ export default function SellWizardPage() {
                         <button
                           type="button"
                           onClick={() => handleDeleteImage(img.fileId, idx)}
-                          title="Delete image from GridFS"
+                          title="Delete image from Supabase Storage"
                           className="absolute top-2 right-2 p-1.5 rounded-full bg-white/80 text-charcoal-400 hover:text-rose-600 hover:bg-white backdrop-blur-md shadow-xs transition-all"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

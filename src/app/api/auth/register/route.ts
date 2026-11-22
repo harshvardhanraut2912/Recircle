@@ -1,18 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase } from '@/lib/supabase';
 import { hashPassword, generateToken, TOKEN_NAME } from '@/lib/auth';
+import { mapUser, USER_PUBLIC_COLUMNS } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
 
-function normalizePhone(phone: string): string {
-  return phone.replace(/[^\d+]/g, '');
-}
+const normalizePhone = (phone: string) => phone.replace(/[^\d+]/g, '');
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { username, phone, email, password, avatarUrl } = body;
+    const { username, phone, email, password, avatarUrl } = await req.json();
 
     if (!username || !phone || !email || !password) {
       return NextResponse.json(
@@ -20,99 +17,67 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
     if (password.length < 6) {
-      return NextResponse.json(
-        { error: 'Password must be at least 6 characters long.' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Password must be at least 6 characters long.' }, { status: 400 });
     }
 
     const cleanPhone = normalizePhone(phone);
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = String(email).trim().toLowerCase();
+    const supabase = getSupabase();
 
-    const db = await getDatabase();
-    const usersCollection = db.collection('users');
-
-    // Check if phone or email already registered
-    const existingUser = await usersCollection.findOne({
-      $or: [{ phone: cleanPhone }, { email: cleanEmail }],
-    });
-
-    if (existingUser) {
-      if (existingUser.phone === cleanPhone) {
-        return NextResponse.json(
-          { error: 'An account with this phone number already exists. Please log in.' },
-          { status: 409 }
-        );
-      }
+    const [byPhone, byEmail] = await Promise.all([
+      supabase.from('users').select('id').eq('phone', cleanPhone).maybeSingle(),
+      supabase.from('users').select('id').eq('email', cleanEmail).maybeSingle(),
+    ]);
+    if (byPhone.data) {
+      return NextResponse.json(
+        { error: 'An account with this phone number already exists. Please log in.' },
+        { status: 409 }
+      );
+    }
+    if (byEmail.data) {
       return NextResponse.json(
         { error: 'An account with this email address already exists. Please log in.' },
         { status: 409 }
       );
     }
 
-    const passwordHash = await hashPassword(password);
-    const userId = new ObjectId();
-    const memberSince = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const { data: created, error } = await supabase
+      .from('users')
+      .insert({
+        username: String(username).trim(),
+        phone: cleanPhone,
+        email: cleanEmail,
+        password_hash: await hashPassword(password),
+        avatar_url: avatarUrl ? String(avatarUrl).trim() : null,
+        member_since: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      })
+      .select(USER_PUBLIC_COLUMNS)
+      .single();
 
-    const newUserDoc = {
-      _id: userId,
-      username: username.trim(),
-      phone: cleanPhone,
-      email: cleanEmail,
-      passwordHash,
-      avatarUrl: avatarUrl ? avatarUrl.trim() : undefined,
-      rating: 5.0,
-      reviewsCount: 0,
-      verified: true,
-      memberSince,
-      city: 'Bangalore',
-      createdAt: new Date().toISOString(),
-    };
+    if (error || !created) {
+      if (error?.code === '23505') {
+        return NextResponse.json({ error: 'An account with these details already exists.' }, { status: 409 });
+      }
+      throw new Error(error?.message || 'Could not create account');
+    }
 
-    await usersCollection.insertOne(newUserDoc);
-
-    const token = generateToken({
-      _id: userId.toString(),
-      phone: cleanPhone,
-      email: cleanEmail,
-      username: username.trim(),
-    });
-
-    const userProfile = {
-      _id: userId.toString(),
-      username: newUserDoc.username,
-      phone: newUserDoc.phone,
-      email: newUserDoc.email,
-      avatarUrl: newUserDoc.avatarUrl || undefined,
-      rating: newUserDoc.rating,
-      reviewsCount: newUserDoc.reviewsCount,
-      verified: newUserDoc.verified,
-      memberSince: newUserDoc.memberSince,
-      city: newUserDoc.city,
-    };
-
-    const response = NextResponse.json({
-      success: true,
-      message: 'Account created successfully!',
-      user: userProfile,
-      token,
-    });
-
-    // Set secure HTTP-only cookie
+    const user = mapUser(created);
+    const token = generateToken(user);
+    const response = NextResponse.json({ success: true, message: 'Account created successfully!', user });
     response.cookies.set(TOKEN_NAME, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: 30 * 24 * 60 * 60, // 30 days
+      maxAge: 30 * 24 * 60 * 60,
     });
-
     return response;
-  } catch (error: unknown) {
+  } catch (error) {
     console.error('Registration error:', error);
-    const msg = error instanceof Error ? error.message : 'Registration failed';
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Registration failed' },
+      { status: 500 }
+    );
   }
 }

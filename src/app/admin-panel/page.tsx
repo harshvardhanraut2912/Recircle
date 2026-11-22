@@ -394,7 +394,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
   const handleDeleteProduct = async (productId: string, productTitle: string) => {
     if (
       !confirm(
-        `Are you sure you want to permanently delete "${productTitle}"? This will clean up its MongoDB GridFS images.`
+        `Are you sure you want to permanently delete "${productTitle}"? This will also delete its images from storage.`
       )
     ) {
       return;
@@ -404,7 +404,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       const data = await res.json();
       if (data.success) {
         setProducts((prev) => prev.filter((p) => p._id !== productId));
-        toast.success(`Product "${productTitle}" deleted from marketplace & GridFS`);
+        toast.success(`Product "${productTitle}" deleted from marketplace & storage`);
         fetchAllData();
       } else {
         toast.error(data.error || 'Failed to delete product');
@@ -536,7 +536,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
 
       const data = await res.json();
       if (res.ok && data.success) {
-        toast.success('CRITICAL: Entire database and GridFS files have been wiped out!');
+        toast.success('CRITICAL: Entire database and storage files have been wiped out!');
         setIsWipeModalOpen(false);
         setWipeConfirmText('');
         // Reset local states to empty
@@ -1087,7 +1087,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
                                       type="button"
                                       onClick={() => handleDeleteProduct(p._id, p.title)}
                                       className="p-1.5 rounded-xl text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors"
-                                      title="Delete product and remove from GridFS"
+                                      title="Delete product and remove its images"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
@@ -1444,7 +1444,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
               <ul className="list-disc list-inside space-y-1 text-slate-300 text-[11.5px]">
                 <li>All registered community users and credentials.</li>
                 <li>All marketplace listings and products.</li>
-                <li>All product images & binary chunks in MongoDB GridFS.</li>
+                <li>All product images in Supabase Storage.</li>
                 <li>All purchase requests, messages, and order history.</li>
               </ul>
               <p className="font-extrabold text-rose-400 pt-1">

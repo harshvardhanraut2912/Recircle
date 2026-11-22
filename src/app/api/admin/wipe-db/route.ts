@@ -1,48 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/mongodb';
+import { getSupabase } from '@/lib/supabase';
 import { assertAdminAuthorized } from '@/lib/admin-auth';
+import { emptyBucket } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
+const NIL = '00000000-0000-0000-0000-000000000000';
+
 export async function POST(req: NextRequest) {
   try {
-    // 1. Strictly verify admin authentication server-side
     const authError = assertAdminAuthorized(req);
     if (authError) return authError;
 
     const body = await req.json().catch(() => ({}));
-    const confirmation = body.confirmation;
-
-    if (confirmation !== 'DELETE ALL DATA') {
-      return NextResponse.json(
-        { error: 'Confirmation phrase "DELETE ALL DATA" required.' },
-        { status: 400 }
-      );
+    if (body.confirmation !== 'DELETE ALL DATA') {
+      return NextResponse.json({ error: 'Confirmation phrase "DELETE ALL DATA" required.' }, { status: 400 });
     }
 
-    const db = await getDatabase();
+    const supabase = getSupabase();
+    const filesDeleted = await emptyBucket();
 
-    // 2. Wipe all collections in the database
-    const [delUsers, delProds, delReqs, delFiles, delChunks] = await Promise.all([
-      db.collection('users').deleteMany({}),
-      db.collection('products').deleteMany({}),
-      db.collection('requests').deleteMany({}),
-      db.collection('product_images.files').deleteMany({}),
-      db.collection('product_images.chunks').deleteMany({}),
-    ]);
+    const results = {
+      requestsDeleted: (await supabase.from('requests').delete({ count: 'exact' }).neq('id', NIL)).count ?? 0,
+      imagesDeleted: (await supabase.from('product_images').delete({ count: 'exact' }).neq('id', NIL)).count ?? 0,
+      productsDeleted: (await supabase.from('products').delete({ count: 'exact' }).neq('id', NIL)).count ?? 0,
+      usersDeleted: (await supabase.from('users').delete({ count: 'exact' }).neq('id', NIL)).count ?? 0,
+      storageFilesDeleted: filesDeleted,
+    };
 
-    return NextResponse.json({
-      success: true,
-      message: 'Entire database wiped out successfully.',
-      details: {
-        usersDeleted: delUsers.deletedCount,
-        productsDeleted: delProds.deletedCount,
-        requestsDeleted: delReqs.deletedCount,
-        gridFSFilesDeleted: delFiles.deletedCount,
-        gridFSChunksDeleted: delChunks.deletedCount,
-      },
-    });
-  } catch (error: unknown) {
+    return NextResponse.json({ success: true, message: 'Entire database wiped out successfully.', details: results });
+  } catch (error) {
     console.error('Wipe database error:', error);
     return NextResponse.json({ error: 'Failed to wipe database' }, { status: 500 });
   }

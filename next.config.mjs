@@ -15,7 +15,7 @@ const nextConfig = {
     ],
   },
   experimental: {
-    serverComponentsExternalPackages: ['sharp', 'mongodb'],
+    serverComponentsExternalPackages: ['sharp'],
   },
 };
 

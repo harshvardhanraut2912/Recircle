@@ -1,43 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { getDatabase } from '@/lib/mongodb';
-import { PurchaseRequest } from '@/types';
+import { getSupabase, isUuid } from '@/lib/supabase';
+import { getActor } from '@/lib/auth';
+import { mapRequest } from '@/lib/mappers';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const db = await getDatabase();
-    const collection = db.collection('requests');
-    const { searchParams } = new URL(req.url);
-
-    const sellerId = searchParams.get('sellerId');
-    const buyerId = searchParams.get('buyerId');
-    const status = searchParams.get('status');
-
-    const query: Record<string, unknown> = {};
-    if (sellerId) {
-      if (sellerId === '6aef65d4676b6547b4dbb657' || sellerId === 'seller-recircle-user') {
-        query.sellerId = { $in: ['6aef65d4676b6547b4dbb657', 'seller-recircle-user'] };
-      } else {
-        query.sellerId = sellerId;
-      }
+    const { user, isAdmin } = await getActor(req);
+    if (!user && !isAdmin) {
+      return NextResponse.json({ error: 'Please log in.' }, { status: 401 });
     }
-    if (buyerId) query.buyerId = buyerId;
-    if (status && status !== 'all') query.status = status;
 
-    const rawRequests = await collection.find(query).sort({ createdAt: -1 }).toArray();
-    const requests = rawRequests.map((r) => ({
-      ...r,
-      _id: r._id.toString(),
-    }));
+    const sp = new URL(req.url).searchParams;
+    const sellerId = sp.get('sellerId');
+    const buyerId = sp.get('buyerId');
+    const status = sp.get('status');
 
-    return NextResponse.json({
-      success: true,
-      requests,
-      count: requests.length,
-    });
-  } catch (error: unknown) {
+    let q = getSupabase().from('requests').select('*').order('created_at', { ascending: false });
+
+    if (isAdmin) {
+      if (isUuid(sellerId)) q = q.eq('seller_id', sellerId);
+      if (isUuid(buyerId)) q = q.eq('buyer_id', buyerId);
+    } else {
+      // regular users only ever see requests where they are the seller or the buyer
+      const me = user!._id;
+      if (sellerId && sellerId === me) q = q.eq('seller_id', me);
+      else if (buyerId && buyerId === me) q = q.eq('buyer_id', me);
+      else q = q.or(`seller_id.eq.${me},buyer_id.eq.${me}`);
+    }
+    if (status && status !== 'all') q = q.eq('status', status);
+
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    const requests = (data || []).map(mapRequest);
+    return NextResponse.json({ success: true, requests, count: requests.length });
+  } catch (error) {
     console.error('Fetch requests error:', error);
     return NextResponse.json({ error: 'Failed to fetch purchase requests' }, { status: 500 });
   }
@@ -45,67 +43,49 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const {
-      productId,
-      productTitle,
-      productImage,
-      productPrice,
-      sellerId,
-      buyerId = 'buyer-demo-user',
-      buyerName = 'Priya Patel',
-      buyerEmail = 'priya.patel@recircle.org',
-      buyerAvatar,
-      offeredPrice,
-      message,
-      deliveryType = 'pickup',
-    } = body;
+    const { user } = await getActor(req);
+    if (!user) return NextResponse.json({ error: 'Please log in to send an offer.' }, { status: 401 });
 
-    if (!productId || offeredPrice === undefined) {
-      return NextResponse.json(
-        { error: 'Product ID and offered price are required' },
-        { status: 400 }
-      );
+    const { productId, offeredPrice, message, deliveryType = 'pickup' } = await req.json();
+    if (!isUuid(productId) || offeredPrice === undefined || isNaN(parseFloat(offeredPrice))) {
+      return NextResponse.json({ error: 'Product ID and offered price are required' }, { status: 400 });
     }
 
-    const db = await getDatabase();
-    const newRequest: Omit<PurchaseRequest, '_id'> & { _id: ObjectId } = {
-      _id: new ObjectId(),
-      productId,
-      productTitle: productTitle || 'Pre-loved Item',
-      productImage: productImage || '/placeholder-product.png',
-      productPrice: parseFloat(productPrice) || parseFloat(offeredPrice),
-      sellerId: sellerId || 'seller-recircle-user',
-      buyerId,
-      buyerName,
-      buyerEmail,
-      buyerAvatar,
-      offeredPrice: parseFloat(offeredPrice),
-      message: (message || "Hi, I'm interested in purchasing this item!").trim(),
-      status: 'new',
-      deliveryType,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    await db.collection('requests').insertOne(newRequest);
-
-    // Increment inquiries counter on product
-    if (ObjectId.isValid(productId)) {
-      await db.collection('products').updateOne(
-        { _id: new ObjectId(productId) },
-        { $inc: { inquiries: 1 } }
-      );
+    const supabase = getSupabase();
+    const { data: product } = await supabase
+      .from('products').select('id, seller_id, title, price, primary_image_url, status')
+      .eq('id', productId).maybeSingle();
+    if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+    if (product.seller_id === user._id) {
+      return NextResponse.json({ error: 'You cannot make an offer on your own listing.' }, { status: 400 });
+    }
+    if (product.status === 'sold') {
+      return NextResponse.json({ error: 'This item has already been sold.' }, { status: 400 });
     }
 
-    return NextResponse.json({
-      success: true,
-      request: {
-        ...newRequest,
-        _id: newRequest._id.toString(),
-      },
-    });
-  } catch (error: unknown) {
+    const { data, error } = await supabase
+      .from('requests')
+      .insert({
+        product_id: product.id,
+        seller_id: product.seller_id,
+        buyer_id: user._id,
+        product_title: product.title,
+        product_image: product.primary_image_url,
+        product_price: product.price,
+        buyer_name: user.username,
+        buyer_email: user.email,
+        buyer_phone: user.phone,
+        buyer_avatar: user.avatarUrl || null,
+        offered_price: parseFloat(offeredPrice),
+        message: String(message || "Hi, I'm interested in purchasing this item!").trim(),
+        delivery_type: ['pickup', 'delivery', 'shipping'].includes(deliveryType) ? deliveryType : 'pickup',
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+
+    return NextResponse.json({ success: true, request: mapRequest(data) });
+  } catch (error) {
     console.error('Create request error:', error);
     return NextResponse.json({ error: 'Failed to create request' }, { status: 500 });
   }
@@ -113,46 +93,31 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { requestId, status } = body;
+    const { user, isAdmin } = await getActor(req);
+    if (!user && !isAdmin) return NextResponse.json({ error: 'Please log in.' }, { status: 401 });
 
-    if (!requestId || !ObjectId.isValid(requestId)) {
-      return NextResponse.json({ error: 'Valid Request ID is required' }, { status: 400 });
-    }
-
+    const { requestId, status } = await req.json();
+    if (!isUuid(requestId)) return NextResponse.json({ error: 'Valid Request ID is required' }, { status: 400 });
     if (!['new', 'accepted', 'rejected', 'completed'].includes(status)) {
       return NextResponse.json({ error: 'Invalid status' }, { status: 400 });
     }
 
-    const db = await getDatabase();
-    const requestCollection = db.collection('requests');
-
-    const result = await requestCollection.findOneAndUpdate(
-      { _id: new ObjectId(requestId) },
-      { $set: { status, updatedAt: new Date().toISOString() } },
-      { returnDocument: 'after' }
-    );
-
-    if (!result) {
-      return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    const supabase = getSupabase();
+    const { data: existing } = await supabase.from('requests').select('*').eq('id', requestId).maybeSingle();
+    if (!existing) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
+    if (!isAdmin && existing.seller_id !== user!._id) {
+      return NextResponse.json({ error: 'Only the seller can update this request.' }, { status: 403 });
     }
 
-    // If marked completed, optionally update product status to 'sold'
-    if (status === 'completed' && result.productId && ObjectId.isValid(result.productId)) {
-      await db.collection('products').updateOne(
-        { _id: new ObjectId(result.productId) },
-        { $set: { status: 'sold', updatedAt: new Date().toISOString() } }
-      );
-    }
+    const { data, error } = await supabase
+      .from('requests').update({ status }).eq('id', requestId).select('*').single();
+    if (error) throw new Error(error.message);
 
-    return NextResponse.json({
-      success: true,
-      request: {
-        ...result,
-        _id: result._id.toString(),
-      },
-    });
-  } catch (error: unknown) {
+    if (status === 'completed') {
+      await supabase.from('products').update({ status: 'sold' }).eq('id', existing.product_id);
+    }
+    return NextResponse.json({ success: true, request: mapRequest(data) });
+  } catch (error) {
     console.error('Update request error:', error);
     return NextResponse.json({ error: 'Failed to update request' }, { status: 500 });
   }
@@ -160,40 +125,28 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    let id = searchParams.get('id') || searchParams.get('requestId');
+    const { user, isAdmin } = await getActor(req);
+    if (!user && !isAdmin) return NextResponse.json({ error: 'Please log in.' }, { status: 401 });
 
+    const sp = new URL(req.url).searchParams;
+    let id = sp.get('id') || sp.get('requestId');
     if (!id) {
       const body = await req.json().catch(() => ({}));
       id = body.id || body.requestId;
     }
+    if (!isUuid(id)) return NextResponse.json({ error: 'Valid Request ID is required' }, { status: 400 });
 
-    if (!id || !ObjectId.isValid(id)) {
-      return NextResponse.json({ error: 'Valid Request ID is required' }, { status: 400 });
+    const supabase = getSupabase();
+    const { data: existing } = await supabase.from('requests').select('id, seller_id, buyer_id').eq('id', id).maybeSingle();
+    if (!existing) return NextResponse.json({ error: 'Purchase enquiry not found' }, { status: 404 });
+    if (!isAdmin && existing.seller_id !== user!._id && existing.buyer_id !== user!._id) {
+      return NextResponse.json({ error: 'Not allowed.' }, { status: 403 });
     }
 
-    const db = await getDatabase();
-    const reqDoc = await db.collection('requests').findOne({ _id: new ObjectId(id) });
-    if (!reqDoc) {
-      return NextResponse.json({ error: 'Purchase enquiry not found' }, { status: 404 });
-    }
-
-    await db.collection('requests').deleteOne({ _id: new ObjectId(id) });
-
-    // Decrement inquiries counter on product if available
-    if (reqDoc.productId && ObjectId.isValid(reqDoc.productId)) {
-      await db.collection('products').updateOne(
-        { _id: new ObjectId(reqDoc.productId), inquiries: { $gt: 0 } },
-        { $inc: { inquiries: -1 } }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Purchase enquiry deleted successfully',
-      deletedId: id,
-    });
-  } catch (error: unknown) {
+    const { error } = await supabase.from('requests').delete().eq('id', id); // trigger fixes inquiries count
+    if (error) throw new Error(error.message);
+    return NextResponse.json({ success: true, message: 'Purchase enquiry deleted successfully', deletedId: id });
+  } catch (error) {
     console.error('Delete request error:', error);
     return NextResponse.json({ error: 'Failed to delete purchase enquiry' }, { status: 500 });
   }
