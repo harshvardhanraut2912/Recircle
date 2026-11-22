@@ -36,9 +36,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-white pb-16 md:pb-0">
+      <body className="min-h-screen flex flex-col antialiased selection:bg-brand-500 selection:text-white pb-[calc(4rem+env(safe-area-inset-bottom))] md:pb-0">
         <Toaster
-          position="top-right"
+          position="top-center"
           richColors
           closeButton
           toastOptions={{

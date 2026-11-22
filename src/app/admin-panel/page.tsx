@@ -604,7 +604,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
     <div className="min-h-screen bg-warm-100 pb-20">
       {/* Top Admin Header */}
       <header className="sticky top-0 z-30 bg-forest text-white border-b border-emerald-950 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
+        <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14 py-3 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <Link
               href="/"
@@ -660,7 +660,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
         </div>
 
         {/* Global Platform Metric Cards */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 border-t border-emerald-900/60">
+        <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14 py-3.5 border-t border-emerald-900/60">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
             <div className="bg-white/10 rounded-2xl p-3 border border-white/10 backdrop-blur-xs">
               <div className="text-[11px] text-emerald-200">Registered Users</div>
@@ -703,7 +703,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
         </div>
 
         {/* Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 sm:space-x-3 overflow-x-auto scrollbar-none">
+        <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14 flex space-x-1 sm:space-x-3 overflow-x-auto scrollbar-none">
           <button
             onClick={() => setTab('users')}
             className={`py-3 px-4 font-bold text-xs sm:text-sm border-b-2 transition-colors flex items-center space-x-2 shrink-0 ${
@@ -743,7 +743,7 @@ function AdminDashboard({ onLogout }: { onLogout: () => void }) {
       </header>
 
       {/* Main Admin Section Body */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6">
+      <main className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14 pt-6">
         {loading ? (
           <div className="bg-white rounded-3xl p-12 text-center shadow-xs border border-gray-200">
             <RefreshCw className="w-8 h-8 text-mint animate-spin mx-auto mb-3" />

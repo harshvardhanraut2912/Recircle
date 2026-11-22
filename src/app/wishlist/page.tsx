@@ -74,7 +74,7 @@ export default function WishlistPage() {
 
   return (
     <div className="min-h-screen bg-warm-100 py-8 sm:py-12">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14">
         <div className="pb-6 border-b border-gray-200/80 mb-8">
           <div className="flex items-center space-x-2">
             <Heart className="w-6 h-6 text-rose-500 fill-rose-500" />

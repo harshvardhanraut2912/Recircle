@@ -88,7 +88,7 @@ export default function ProductDetailPage() {
   if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-warm-100 py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto space-y-8 animate-pulse">
+        <div className="w-full space-y-8 animate-pulse">
           <div className="h-5 bg-gray-200 rounded w-1/4" />
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             <div className="lg:col-span-7 h-[450px] bg-gray-200 rounded-3xl" />
@@ -253,7 +253,7 @@ export default function ProductDetailPage() {
 
   return (
     <div className="min-h-screen bg-warm-100 py-6 sm:py-10">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14">
         {/* Breadcrumb row */}
         <nav className="flex items-center space-x-2 text-xs text-charcoal-400 mb-6">
           <Link href="/" className="hover:text-forest transition-colors flex items-center gap-1">

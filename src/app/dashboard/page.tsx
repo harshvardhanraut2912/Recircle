@@ -243,7 +243,7 @@ function DashboardContent() {
 
   return (
     <div className="min-h-screen bg-warm-100 py-6 sm:py-10">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="w-full px-4 sm:px-6 lg:px-10 2xl:px-14">
         {/* Dashboard Top Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-8 gap-4">
           <div>

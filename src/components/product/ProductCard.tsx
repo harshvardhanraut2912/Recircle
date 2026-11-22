@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { Heart, MapPin, Sparkles, ShieldCheck, Leaf, Lock } from 'lucide-react';
+import { Heart, MapPin, ShieldCheck, Leaf } from 'lucide-react';
 import { Product } from '@/types';
 import { useWishlist } from '@/lib/wishlist';
 import { useAuth } from '@/lib/auth-context';
@@ -19,7 +19,6 @@ export default function ProductCard({ product }: ProductCardProps) {
   const { isWishlisted, toggle } = useWishlist();
   const wishlisted = isWishlisted(product._id);
   const [imageError, setImageError] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
 
   const productDestination = `/products/${product._id}`;
 
@@ -50,22 +49,6 @@ export default function ProductCard({ product }: ProductCardProps) {
     }
   };
 
-  // Condition Badge Styling
-  const getConditionBadge = (condition: string) => {
-    switch (condition) {
-      case 'Brand New':
-        return 'bg-forest text-white border-forest';
-      case 'Like New':
-        return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      case 'Very Good':
-        return 'bg-teal-50 text-teal-700 border-teal-200';
-      case 'Good':
-        return 'bg-amber-50 text-amber-700 border-amber-200';
-      default:
-        return 'bg-gray-100 text-gray-700 border-gray-200';
-    }
-  };
-
   const displayImage = imageError || !product.primaryImageUrl
     ? '/placeholder-product.png'
     : product.primaryImageUrl;
@@ -73,128 +56,68 @@ export default function ProductCard({ product }: ProductCardProps) {
   return (
     <div
       onClick={handleCardClick}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      className="group flex flex-col h-full bg-white rounded-2xl border border-gray-200/80 shadow-xs hover:shadow-card-hover hover:border-brand-300 transition-all duration-300 overflow-hidden relative cursor-pointer"
+      className="group flex flex-col h-full bg-white rounded-2xl border border-gray-200/80 hover:border-brand-300 hover:shadow-card transition-all duration-200 overflow-hidden relative cursor-pointer"
     >
-      {/* Image Container with Consistent 4:3 Aspect Ratio */}
-      <div className="relative block w-full pt-[75%] bg-warm-200 overflow-hidden">
+      {/* Image */}
+      <div className="relative block w-full pt-[80%] bg-warm-200 overflow-hidden">
         {displayImage === '/placeholder-product.png' ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-brand-50/50 p-4 text-center">
-            <Leaf className="w-10 h-10 text-mint mb-1" />
-            <span className="text-xs font-semibold text-forest">ReCircle Verified</span>
-            <span className="text-[10px] text-charcoal-400">{product.category}</span>
+            <Leaf className="w-9 h-9 text-mint mb-1" />
+            <span className="text-xs text-charcoal-500">{product.category}</span>
           </div>
         ) : (
           <Image
             src={displayImage}
             alt={product.title}
             fill
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, (max-width: 1536px) 25vw, 20vw"
             className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500 ease-out"
             onError={() => setImageError(true)}
           />
         )}
 
-        {/* Top Badges Overlay */}
-        <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
-          {/* Condition Pill */}
-          <span
-            className={`px-2.5 py-1 rounded-full text-[10.5px] font-semibold border shadow-xs pointer-events-auto backdrop-blur-xs ${getConditionBadge(
-              product.condition
-            )}`}
-          >
-            {product.condition}
+        <button
+          type="button"
+          onClick={handleWishlistClick}
+          aria-label={wishlisted ? 'Remove from wishlist' : 'Save to wishlist'}
+          className="absolute top-2 right-2 w-9 h-9 rounded-full bg-white/95 shadow-subtle flex items-center justify-center text-charcoal-500 hover:text-rose-500 active:scale-95 transition-all"
+        >
+          <Heart className={`w-[18px] h-[18px] ${wishlisted ? 'fill-rose-500 text-rose-500' : ''}`} />
+        </button>
+
+        {product.savingsPercentage && product.savingsPercentage > 0 ? (
+          <span className="absolute bottom-2 left-2 px-2 py-0.5 rounded-md bg-forest text-white text-[11px] font-bold">
+            {product.savingsPercentage}% off
           </span>
-
-          {/* Wishlist Button */}
-          <button
-            type="button"
-            onClick={handleWishlistClick}
-            aria-label={wishlisted ? 'Remove from wishlist' : 'Save to wishlist'}
-            className="pointer-events-auto w-8 h-8 rounded-full bg-white/90 backdrop-blur-sm shadow-subtle flex items-center justify-center text-charcoal-500 hover:text-rose-500 hover:scale-110 active:scale-95 transition-all duration-200"
-          >
-            <Heart
-              className={`w-4 h-4 transition-colors ${
-                wishlisted ? 'fill-rose-500 text-rose-500' : ''
-              }`}
-            />
-          </button>
-        </div>
-
-        {/* Eco Savings Badge (bottom left of image) */}
-        {product.savingsPercentage && product.savingsPercentage > 0 && (
-          <div className="absolute bottom-2.5 left-2.5">
-            <span className="px-2 py-0.5 rounded-md bg-forest/90 text-mint text-[10px] font-bold tracking-wide backdrop-blur-sm shadow-xs flex items-center gap-1">
-              <Sparkles className="w-2.5 h-2.5" />
-              Save {product.savingsPercentage}%
-            </span>
-          </div>
-        )}
-
-        {/* Unauthenticated subtle lock badge when hovered */}
-        {!user && isHovered && (
-          <div className="absolute inset-0 bg-forest-dark/40 backdrop-blur-xs flex items-center justify-center transition-all animate-in fade-in duration-150">
-            <div className="px-3.5 py-1.5 rounded-full bg-white/95 text-forest text-xs font-bold shadow-card flex items-center space-x-1.5">
-              <Lock className="w-3.5 h-3.5 text-mint" />
-              <span>Log in to View</span>
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
 
-      {/* Content Body */}
-      <div className="p-4 flex flex-col flex-1 justify-between">
-        <div>
-          {/* Category & Brand row */}
-          <div className="flex items-center justify-between text-[11px] text-charcoal-400 mb-1.5 font-medium">
-            <span className="uppercase tracking-wider">{product.category}</span>
-            <span className="truncate max-w-[120px]">{product.brand}</span>
-          </div>
+      {/* Body */}
+      <div className="p-3 sm:p-4 flex flex-col flex-1 gap-2">
+        <h3 className="text-sm font-semibold text-charcoal-900 group-hover:text-forest line-clamp-2 leading-snug min-h-[2.5rem]">
+          {product.title}
+        </h3>
 
-          {/* Product Title */}
-          <h3 className="text-sm font-semibold text-charcoal-900 group-hover:text-forest line-clamp-2 leading-snug transition-colors">
-            {product.title}
-          </h3>
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-base sm:text-lg font-extrabold text-forest">
+            ₹{product.price.toLocaleString()}
+          </span>
+          {product.originalPrice && product.originalPrice > product.price && (
+            <span className="text-xs text-charcoal-400 line-through">
+              ₹{product.originalPrice.toLocaleString()}
+            </span>
+          )}
         </div>
 
-        <div className="pt-3 border-t border-gray-100/80 mt-3">
-          {/* Price & Original Price */}
-          <div className="flex items-baseline justify-between mb-2">
-            <div className="flex items-baseline space-x-2">
-              <span className="text-lg font-extrabold text-forest tracking-tight">
-                ₹{product.price.toLocaleString()}
-              </span>
-              {product.originalPrice && product.originalPrice > product.price && (
-                <span className="text-xs text-charcoal-400 line-through">
-                  ₹{product.originalPrice.toLocaleString()}
-                </span>
-              )}
-            </div>
-            {product.estimatedCo2Savings && (
-              <span className="text-[10px] text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5" title="Estimated Carbon Footprint Reduced">
-                <Leaf className="w-2.5 h-2.5 text-mint" />
-                -{product.estimatedCo2Savings}kg CO2
-              </span>
+        <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-gray-100 text-xs text-charcoal-500">
+          <span className="truncate">{product.condition}</span>
+          <span className="flex items-center gap-1 min-w-0">
+            <MapPin className="w-3 h-3 text-mint shrink-0" />
+            <span className="truncate">{product.location?.city || 'Local'}</span>
+            {product.seller?.verified && (
+              <ShieldCheck className="w-3.5 h-3.5 text-mint shrink-0" aria-label="Verified seller" />
             )}
-          </div>
-
-          {/* Seller & Location Footer */}
-          <div className="flex items-center justify-between text-[11px] text-charcoal-500 pt-1">
-            <div className="flex items-center space-x-1 truncate max-w-[140px]">
-              <MapPin className="w-3 h-3 text-mint shrink-0" />
-              <span className="truncate">{product.location?.city || 'Local Pickup'}</span>
-            </div>
-
-            <div className="flex items-center space-x-1 shrink-0">
-              <span className="font-medium text-charcoal-700">{product.seller?.name?.split(' ')[0]}</span>
-              {product.seller?.verified && (
-                <span title="Verified Seller" className="inline-flex items-center">
-                  <ShieldCheck className="w-3.5 h-3.5 text-mint shrink-0" />
-                </span>
-              )}
-            </div>
-          </div>
+          </span>
         </div>
       </div>
     </div>
